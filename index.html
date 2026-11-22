@@ -55,6 +55,16 @@
   .label a { color: inherit; text-decoration: none; }
   .label a:hover { text-decoration: underline; }
   .msg { padding: 24px 14px; color: var(--muted); }
+  .grouprow.label { cursor: pointer; user-select: none; }
+  .chev { display: inline-block; width: 12px; color: var(--muted); font-size: 10px; transition: transform .15s; }
+  .collapsed .chev { transform: rotate(-90deg); }
+  .gbar { position: absolute; top: 10px; height: 12px; border-radius: 3px; }
+  .gbar.cons { opacity: .9; }
+  .seg { position: absolute; top: 0; height: 100%; border-radius: 4px; }
+  .conflict { outline: 2px solid var(--today); outline-offset: 1px; }
+  .tools button { border: 1px solid var(--line-strong); background: transparent; color: var(--muted); border-radius: 4px;
+                  cursor: pointer; font-size: 11px; padding: 1px 6px; margin-left: 4px; }
+  .tools button:hover { color: var(--fg); }
   .msg.err { color: var(--today); }
 </style>
 </head>
@@ -63,9 +73,10 @@
   <h1>🚀 Sample Product Launch</h1>
   <div class="legend">
     <span><i class="sw" style="background:var(--best)"></i>Best case</span>
-    <span><i class="sw" style="background:var(--cons)"></i>Conservative buffer</span>
+    <span><i class="sw" style="background:var(--cons)"></i>Conservative</span>
     <span><i class="sw" style="background:var(--done)"></i>Done</span>
   </div>
+  <div class="tools"><button id="expandAll">Expand all</button><button id="collapseAll">Collapse all</button></div>
   <div class="note"><span id="updated">Loading…</span> <button id="refresh" title="Reload from Notion">↻</button></div>
 </header>
 <div class="wrap"><div class="grid" id="g"></div></div>
@@ -80,14 +91,25 @@ const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt
 const el = (cls, html = "", style = "") => { const e = document.createElement("div"); e.className = cls; e.innerHTML = html; if (style) e.style.cssText = style; return e; };
 const g = document.getElementById("g"), tip = document.getElementById("tip"), updated = document.getElementById("updated");
 
+// Collapsed groups are remembered per browser (best effort; storage can be unavailable in embeds).
+let collapsed = new Set();
+try { collapsed = new Set(JSON.parse(localStorage.getItem("gantt-collapsed") || "[]")); } catch {}
+const saveCollapsed = () => { try { localStorage.setItem("gantt-collapsed", JSON.stringify([...collapsed])); } catch {} };
+
+let TASKS = [];
 async function load() {
   updated.textContent = "Loading…";
   try {
     const r = await fetch("/api/tasks", { cache: "no-store" });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
-    render(data.tasks);
-    updated.textContent = "Live from Notion · updated " + new Date(data.fetchedAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
+    TASKS = data.tasks.filter(t => t.bestStart);
+    render();
+    const time = new Date(data.fetchedAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
+    const sync = data.sync || {};
+    updated.innerHTML = esc("Live from Notion · updated " + time) +
+      (sync.ok === false ? ` · <span style="color:var(--today)" title="${esc(sync.message)}">⚠ dates not saved to Notion</span>`
+        : sync.updated ? ` · ${sync.updated} date${sync.updated === 1 ? "" : "s"} saved to Notion` : "");
   } catch (e) {
     g.innerHTML = ""; g.style.gridTemplateColumns = "1fr";
     g.append(el("msg err", "Couldn't load tasks from Notion: " + esc(e.message)));
@@ -95,18 +117,28 @@ async function load() {
   }
 }
 document.getElementById("refresh").onclick = load;
+const phaseOf = t => t.phase || "No phase";
+document.getElementById("collapseAll").onclick = () => { collapsed = new Set(TASKS.map(phaseOf)); saveCollapsed(); render(); };
+document.getElementById("expandAll").onclick = () => { collapsed.clear(); saveCollapsed(); render(); };
 
-function render(TASKS) {
+// One task's two schedules as UTC ms (ends are inclusive days). Dates come from the server-side scheduler.
+function spans(t) {
+  const s = d(t.bestStart), b = d(t.bestEnd), cs = d(t.consStart), ce = d(t.consEnd);
+  return { s, b, cs, ce, conflict: false };
+}
+
+function render() {
   g.innerHTML = "";
   if (!TASKS.length) { g.style.gridTemplateColumns = "1fr"; g.append(el("msg", "No tasks with a Start date yet.")); return; }
+  const byId = Object.fromEntries(TASKS.map(t => [t.id.replace(/-/g, ""), t]));
 
-  const endOf = t => Math.max(...[t.start, t.bestEnd, t.consEnd, t.actualEnd].filter(Boolean).map(d));
-  let min = Math.min(...TASKS.map(t => d(t.start)));
-  let max = Math.max(...TASKS.map(endOf));
+  let min = Math.min(...TASKS.map(t => Math.min(d(t.bestStart), d(t.consStart))));
+  let max = Math.max(...TASKS.map(t => { const p = spans(t); return Math.max(p.b, p.ce, p.cs); }));
   min -= ((new Date(min).getUTCDay() + 6) % 7) * DAY;
   max += (7 - new Date(max).getUTCDay()) % 7 * DAY + 7 * DAY;
   const days = Math.round((max - min) / DAY) + 1;
   const x = t => Math.round((t - min) / DAY) * PX;
+  const w = (a, b) => x(b + DAY) - x(a);           // width of an inclusive day range
   g.style.gridTemplateColumns = `${LABEL_W}px ${days * PX}px`;
 
   g.append(el("label head", "Task"));
@@ -132,48 +164,85 @@ function render(TASKS) {
     return frag;
   };
 
-  const phases = [...new Set(TASKS.map(t => t.phase || "No phase"))]
+  const phases = [...new Set(TASKS.map(phaseOf))]
     .sort((a, b) => (PHASE_ORDER.indexOf(a) + 1 || 99) - (PHASE_ORDER.indexOf(b) + 1 || 99) || a.localeCompare(b));
 
   for (const ph of phases) {
-    const rows = TASKS.filter(t => (t.phase || "No phase") === ph).sort((a,b) => d(a.start) - d(b.start));
-    g.append(el("label row grouprow", `${esc(ph)} <span class="count">${rows.length}</span>`));
-    const gt = el("track row grouprow"); gt.append(bgFor()); g.append(gt);
+    const rows = TASKS.filter(t => phaseOf(t) === ph).sort((a,b) => d(a.bestStart) - d(b.bestStart) || d(a.bestEnd) - d(b.bestEnd));
+    const isCollapsed = collapsed.has(ph);
+    const allDone = rows.every(t => t.status === "Done");
+    const sp = rows.map(spans);
+    const grp = {
+      s: Math.min(...sp.map(p => p.s)), b: Math.max(...sp.map(p => p.b)),
+      cs: Math.min(...sp.map(p => p.cs)), ce: Math.max(...sp.map(p => p.ce)),
+    };
+    const doneCount = rows.filter(t => t.status === "Done").length;
 
-    for (const t of rows) {
+    // Group header row with its own summary bar
+    const gl = el("label row grouprow" + (isCollapsed ? " collapsed" : ""), `<span class="chev">▼</span>${esc(ph)} <span class="count">${doneCount}/${rows.length} done</span>`);
+    gl.title = isCollapsed ? "Expand" : "Collapse";
+    gl.onclick = () => { isCollapsed ? collapsed.delete(ph) : collapsed.add(ph); saveCollapsed(); render(); };
+    g.append(gl);
+    const gt = el("track row grouprow"); gt.append(bgFor());
+    const consColor = allDone ? "var(--done)" : "var(--cons)", bestColor = allDone ? "var(--done)" : "var(--best)";
+    const gc = el("gbar cons", "", `left:${x(grp.cs)}px;width:${w(grp.cs, grp.ce)}px;background:${consColor};${allDone ? "opacity:.55" : ""}`);
+    const gb = el("gbar", "", `left:${x(grp.s)}px;width:${w(grp.s, grp.b)}px;background:${bestColor}`);
+    gt.append(gc, gb);
+    const gtip = {
+      title: `${ph} (${rows.length} tasks)`,
+      lines: [
+        ["Status", `${doneCount} of ${rows.length} done`],
+        ["Best case", `${fmt(grp.s)} → ${fmt(grp.b)}`],
+        ["Conservative", `${fmt(grp.cs)} → ${fmt(grp.ce)}`],
+      ],
+    };
+    hook(gb, gtip); hook(gc, gtip);
+    g.append(gt);
+    if (isCollapsed) continue;
+
+    rows.forEach((t, i) => {
+      const p = sp[i];
       const lab = el("label row", `<i class="dot" style="background:${STATUS_COLOR[t.status] || "#9b9a97"}"></i><a class="name" href="${esc(t.url)}" target="_blank" rel="noopener">${esc(t.name) || "Untitled"}</a>`);
       lab.title = t.name;
       g.append(lab);
       const tr = el("track row"); tr.append(bgFor());
-      const s = d(t.start), b = t.bestEnd ? d(t.bestEnd) : s, c = t.consEnd ? Math.max(d(t.consEnd), b) : b;
       const done = t.status === "Done";
-      if (s === b && c === b) {
-        const m = el("ms", "", `left:${x(s) + PX/2 - 7}px;background:${done ? "var(--done)" : "var(--best)"}`);
-        hook(m, t); tr.append(m);
+      const blockers = (t.blockedBy || []).map(id => byId[id.replace(/-/g, "")]?.name).filter(Boolean);
+      const info = {
+        title: t.name,
+        lines: [
+          ["Status", `${t.status || "—"}${t.progress != null ? " · " + Math.round(t.progress*100) + "%" : ""}`],
+          t.owner && ["Owner", t.owner],
+          ["Best case", `${fmt(p.s)} → ${fmt(p.b)}${t.bestDays ? ` (${t.bestDays} working days)` : ""}`],
+          ["Conservative", `${fmt(p.cs)} → ${fmt(p.ce)}${t.consDays ? ` (${t.consDays} working days)` : ""}`],
+          blockers.length && ["Waits for", blockers.join(", ")],
+          t.earliestStart && ["Not before", fmt(d(t.earliestStart))],
+          (t.actualStart || t.actualEnd) && ["Actual", `${t.actualStart ? fmt(d(t.actualStart)) : "?"} → ${t.actualEnd ? fmt(d(t.actualEnd)) : "?"}`],
+          ...(t.issues || []).map(i => ["⚠", i]),
+        ].filter(Boolean),
+      };
+      if (p.s === p.b && p.cs === p.s && p.ce === p.b) {
+        const m = el("ms", "", `left:${x(p.s) + PX/2 - 7}px;background:${done ? "var(--done)" : "var(--best)"}`);
+        hook(m, info); tr.append(m);
       } else {
-        const bestW = x(b + DAY) - x(s), consW = x(c + DAY) - x(b + DAY);
-        const bar = el("bar", "", `left:${x(s)}px;width:${bestW + consW}px`);
-        bar.append(el("", "", `width:${bestW}px;background:${done ? "var(--done)" : "var(--best)"}`));
-        if (consW > 0) bar.append(el("", "", `width:${consW}px;background:${done ? "var(--done)" : "var(--cons)"};${done ? "opacity:.75" : ""}`));
-        hook(bar, t); tr.append(bar);
+        // Conservative span (yellow) sits behind; best case (green) on top. Same look as before when both start together.
+        const lo = Math.min(p.s, p.cs), hi = Math.max(p.b, p.ce);
+        const bar = el("bar" + ((t.issues || []).length ? " conflict" : ""), "", `left:${x(lo)}px;width:${w(lo, hi)}px;background:transparent;overflow:visible`);
+        bar.append(el("seg", "", `left:${x(p.cs) - x(lo)}px;width:${w(p.cs, p.ce)}px;background:${done ? "var(--done)" : "var(--cons)"};${done ? "opacity:.6" : ""}`));
+        bar.append(el("seg", "", `left:${x(p.s) - x(lo)}px;width:${w(p.s, p.b)}px;background:${done ? "var(--done)" : "var(--best)"}`));
+        hook(bar, info); tr.append(bar);
       }
       g.append(tr);
-    }
+    });
   }
 
   const now = new Date(), today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
   if (today >= min && today <= max) g.append(el("today", "", `left:${LABEL_W + x(today)}px`));
 }
 
-function hook(node, t) {
+function hook(node, info) {
   node.addEventListener("mousemove", e => {
-    const range = (a, b) => `${a ? fmt(d(a)) : "?"} → ${b ? fmt(d(b)) : "?"}`;
-    tip.innerHTML = `<b>${esc(t.name)}</b>
-      <span class="k">Status:</span> ${esc(t.status || "—")}${t.progress != null ? " · " + Math.round(t.progress*100) + "%" : ""}<br>
-      ${t.owner ? `<span class="k">Owner:</span> ${esc(t.owner)}<br>` : ""}
-      <span class="k">Best case:</span> ${range(t.start, t.bestEnd)}<br>
-      ${t.consEnd ? `<span class="k">Conservative:</span> ${range(t.consStart || t.start, t.consEnd)}<br>` : ""}
-      ${t.actualStart || t.actualEnd ? `<span class="k">Actual:</span> ${range(t.actualStart, t.actualEnd)}` : ""}`;
+    tip.innerHTML = `<b>${esc(info.title)}</b>` + info.lines.map(([k, v]) => `<span class="k">${esc(k)}:</span> ${esc(v)}`).join("<br>");
     tip.style.display = "block";
     const r = tip.getBoundingClientRect();
     tip.style.left = Math.min(e.clientX + 12, innerWidth - r.width - 8) + "px";
