@@ -2,6 +2,7 @@
 // writes any changed calculated dates back to Notion, and returns the tasks to the chart.
 // Your Notion secret stays here on the server; the browser never sees it.
 
+import { timingSafeEqual } from "node:crypto";
 import { schedule } from "../lib/schedule.js";
 
 const NOTION_VERSION = "2026-03-11";
@@ -16,14 +17,25 @@ const OUTPUTS = {
 };
 
 export default async function handler(req, res) {
+  res.setHeader("Cache-Control", "no-store");
   const token = process.env.NOTION_TOKEN;
-  const dataSourceId = process.env.NOTION_DATA_SOURCE_ID;
-  if (!token || !dataSourceId) {
-    return res.status(500).json({ error: "Missing NOTION_TOKEN or NOTION_DATA_SOURCE_ID environment variable in Vercel." });
+  const database = process.env.NOTION_DATABASE || process.env.NOTION_DATA_SOURCE_ID;
+  const chartKey = process.env.CHART_KEY;
+  const missing = [!token && "NOTION_TOKEN", !database && "NOTION_DATABASE", !chartKey && "CHART_KEY"].filter(Boolean);
+  if (missing.length) {
+    return res.status(500).json({ error: `Setup incomplete: add ${missing.join(", ")} in Vercel → Settings → Environment Variables, then redeploy.` });
   }
+
+  // Only answer requests that carry the right chart key (sent by the page from the #key=… part of its link).
+  if (!sameSecret(String(req.headers["x-chart-key"] || ""), chartKey)) {
+    return res.status(401).json({ error: "Not authorised. Open the chart using its full link, including the #key=… part.", code: "bad_key" });
+  }
+
   const headers = { Authorization: `Bearer ${token}`, "Notion-Version": NOTION_VERSION, "Content-Type": "application/json" };
 
   try {
+    const dataSourceId = await resolveDataSource(database, headers);
+
     // 1. Read every task
     const pages = [];
     let cursor;
@@ -33,7 +45,7 @@ export default async function handler(req, res) {
         body: JSON.stringify({ page_size: 100, ...(cursor ? { start_cursor: cursor } : {}) }),
       });
       const data = await r.json();
-      if (!r.ok) return res.status(r.status).json({ error: data.message || "Notion API error", code: data.code });
+      if (!r.ok) return res.status(r.status).json({ error: friendly(data), code: data.code });
       pages.push(...data.results);
       cursor = data.has_more ? data.next_cursor : undefined;
     } while (cursor);
@@ -46,11 +58,43 @@ export default async function handler(req, res) {
     // 3. Write changed dates back to Notion (needs "Update content" on the connection)
     const sync = await writeBack(tasks, headers);
 
-    res.setHeader("Cache-Control", "no-store");
     return res.status(200).json({ tasks, sync, fetchedAt: new Date().toISOString() });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
+}
+
+// Constant-time comparison, so the key can't be guessed one character at a time.
+function sameSecret(a, b) {
+  const x = Buffer.from(a), y = Buffer.from(b);
+  return x.length === y.length && timingSafeEqual(x, y);
+}
+
+// NOTION_DATABASE can be the database's link (copied from the browser or "Copy link to view"),
+// a database ID, or a data source ID. Work out the data source ID from whichever it is.
+let cachedSource;
+async function resolveDataSource(value, headers) {
+  if (cachedSource?.value === value) return cachedSource.id;
+  const path = value.trim().split(/[?#]/)[0].replace(/-/g, "");
+  const ids = path.match(/[0-9a-f]{32}/gi);
+  if (!ids) throw new Error("NOTION_DATABASE doesn't look like a Notion database link or ID.");
+  const id = ids[ids.length - 1];
+  let sourceId = id;
+  const r = await fetch(`${API}/databases/${id}`, { headers });
+  if (r.ok) {
+    const db = await r.json();
+    if (db.data_sources?.length) sourceId = db.data_sources[0].id;
+  }
+  cachedSource = { value, id: sourceId };
+  return sourceId;
+}
+
+function friendly(e) {
+  if (e.code === "object_not_found")
+    return "Notion can't find that database. Check NOTION_DATABASE, and make sure the database is shared with your Notion connection (••• menu → Connections).";
+  if (e.code === "unauthorized")
+    return "Notion rejected the NOTION_TOKEN. Copy the API token from your Notion connection again and update it in Vercel.";
+  return e.message || "Notion API error";
 }
 
 async function writeBack(tasks, headers) {

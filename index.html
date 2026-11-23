@@ -100,7 +100,8 @@ let TASKS = [];
 async function load() {
   updated.textContent = "Loading…";
   try {
-    const r = await fetch("/api/tasks", { cache: "no-store" });
+    const key = new URLSearchParams(location.hash.slice(1)).get("key") || "";
+    const r = await fetch("/api/tasks", { cache: "no-store", headers: { "x-chart-key": key } });
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     TASKS = data.tasks.filter(t => t.bestStart);
@@ -117,6 +118,7 @@ async function load() {
   }
 }
 document.getElementById("refresh").onclick = load;
+addEventListener("hashchange", load);
 const phaseOf = t => t.phase || "No phase";
 document.getElementById("collapseAll").onclick = () => { collapsed = new Set(TASKS.map(phaseOf)); saveCollapsed(); render(); };
 document.getElementById("expandAll").onclick = () => { collapsed.clear(); saveCollapsed(); render(); };
