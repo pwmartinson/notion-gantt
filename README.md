@@ -12,7 +12,7 @@ A live Gantt chart for a Notion task database, with dependency-driven scheduling
 |---|---|
 | `NOTION_TOKEN` | Your Notion connection's API token (starts with `ntn_`) |
 | `NOTION_DATABASE` | The link to your task database (a database ID or data source ID also works) |
-| `CHART_KEY` | A long random string. Open the chart as `https://<your-app>.vercel.app/#key=<CHART_KEY>` |
+| `CHART_KEY` | A long random string. Open the chart as `https://<your-app>.vercel.app/?key=<CHART_KEY>` |
 
 The chart refuses to run without all three. After changing any of them, redeploy.
 

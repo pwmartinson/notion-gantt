@@ -26,9 +26,9 @@ export default async function handler(req, res) {
     return res.status(500).json({ error: `Setup incomplete: add ${missing.join(", ")} in Vercel → Settings → Environment Variables, then redeploy.` });
   }
 
-  // Only answer requests that carry the right chart key (sent by the page from the #key=… part of its link).
+  // Only answer requests that carry the right chart key (sent by the page from the ?key=… part of its link).
   if (!sameSecret(String(req.headers["x-chart-key"] || ""), chartKey)) {
-    return res.status(401).json({ error: "Not authorised. Open the chart using its full link, including the #key=… part.", code: "bad_key" });
+    return res.status(401).json({ error: "Not authorised. Open the chart using its full link, including the ?key=… part.", code: "bad_key" });
   }
 
   const headers = { Authorization: `Bearer ${token}`, "Notion-Version": NOTION_VERSION, "Content-Type": "application/json" };
