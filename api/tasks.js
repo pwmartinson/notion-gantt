@@ -50,6 +50,17 @@ export default async function handler(req, res) {
       cursor = data.has_more ? data.next_cursor : undefined;
     } while (cursor);
 
+    // Phase order = the order of the Phase options in Notion (drag them in the property settings to reorder).
+    let phaseOrder = [], title = "", icon = "";
+    const ds = await fetch(`${API}/data_sources/${dataSourceId}`, { headers });
+    if (ds.ok) {
+      const schema = await ds.json();
+      const ph = schema.properties?.["Phase"];
+      phaseOrder = (ph?.select?.options || ph?.status?.options || []).map(o => o.name);
+      title = (schema.title || []).map(t => t.plain_text).join("");
+      icon = schema.icon?.type === "emoji" ? schema.icon.emoji : "";
+    }
+
     // 2. Work out the schedule
     const tasks = pages.map(toTask);
     const plan = schedule(tasks);
@@ -58,7 +69,7 @@ export default async function handler(req, res) {
     // 3. Write changed dates back to Notion (needs "Update content" on the connection)
     const sync = await writeBack(tasks, headers);
 
-    return res.status(200).json({ tasks, sync, fetchedAt: new Date().toISOString() });
+    return res.status(200).json({ tasks, phaseOrder, title, icon, sync, fetchedAt: new Date().toISOString() });
   } catch (err) {
     return res.status(500).json({ error: String(err) });
   }
