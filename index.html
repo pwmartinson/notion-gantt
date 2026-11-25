@@ -72,7 +72,7 @@
 <header>
   <h1 id="title">Project</h1>
   <div class="legend">
-    <span><i class="sw" style="background:var(--best)"></i>Best case</span>
+    <span><i class="sw" style="background:var(--best)"></i>Optimistic</span>
     <span><i class="sw" style="background:var(--cons)"></i>Conservative</span>
     <span><i class="sw" style="background:var(--done)"></i>Done</span>
   </div>
@@ -195,15 +195,16 @@ function render() {
     g.append(gl);
     const gt = el("track row grouprow"); gt.append(bgFor());
     const consColor = allDone ? "var(--done)" : "var(--cons)", bestColor = allDone ? "var(--done)" : "var(--best)";
-    const gc = el("gbar cons", "", `left:${x(grp.cs)}px;width:${w(grp.cs, grp.ce)}px;background:${consColor};${allDone ? "opacity:.55" : ""}`);
+    // Yellow runs straight on from the day after green ends to the conservative finish.
+    const gc = el("gbar cons", "", grp.ce > grp.b ? `left:${x(grp.b + DAY)}px;width:${w(grp.b + DAY, grp.ce)}px;background:${consColor};${allDone ? "opacity:.55" : ""}` : "display:none");
     const gb = el("gbar", "", `left:${x(grp.s)}px;width:${w(grp.s, grp.b)}px;background:${bestColor}`);
     gt.append(gc, gb);
     const gtip = {
       title: `${ph} (${rows.length} tasks)`,
       lines: [
         ["Status", `${doneCount} of ${rows.length} done`],
-        ["Best case", `${fmt(grp.s)} → ${fmt(grp.b)}`],
-        ["Conservative", `${fmt(grp.cs)} → ${fmt(grp.ce)}`],
+        ["Optimistic", `${fmt(grp.s)} → ${fmt(grp.b)}`],
+        ["Conservative", `${fmt(grp.s)} → ${fmt(grp.ce)}`],
       ],
     };
     hook(gb, gtip); hook(gc, gtip);
@@ -223,7 +224,7 @@ function render() {
         lines: [
           ["Status", `${t.status || "—"}${t.progress != null ? " · " + Math.round(t.progress*100) + "%" : ""}`],
           t.owner && ["Owner", t.owner],
-          ["Best case", `${fmt(p.s)} → ${fmt(p.b)}${t.bestDays ? ` (${t.bestDays} working days)` : ""}`],
+          ["Optimistic", `${fmt(p.s)} → ${fmt(p.b)}${t.bestDays ? ` (${t.bestDays} working days)` : ""}`],
           ["Conservative", `${fmt(p.cs)} → ${fmt(p.ce)}${t.consDays ? ` (${t.consDays} working days)` : ""}`],
           blockers.length && ["Waits for", blockers.join(", ")],
           t.earliestStart && ["Not before", fmt(d(t.earliestStart))],
@@ -231,15 +232,15 @@ function render() {
           ...(t.issues || []).map(i => ["⚠", i]),
         ].filter(Boolean),
       };
-      if (p.s === p.b && p.cs === p.s && p.ce === p.b) {
+      if (p.s === p.b && p.ce <= p.b) {
         const m = el("ms", "", `left:${x(p.s) + PX/2 - 7}px;background:${done ? "var(--done)" : "var(--best)"}`);
         hook(m, info); tr.append(m);
       } else {
-        // Conservative span (yellow) sits behind; best case (green) on top. Same look as before when both start together.
-        const lo = Math.min(p.s, p.cs), hi = Math.max(p.b, p.ce);
-        const bar = el("bar" + ((t.issues || []).length ? " conflict" : ""), "", `left:${x(lo)}px;width:${w(lo, hi)}px;background:transparent;overflow:visible`);
-        bar.append(el("seg", "", `left:${x(p.cs) - x(lo)}px;width:${w(p.cs, p.ce)}px;background:${done ? "var(--done)" : "var(--cons)"};${done ? "opacity:.6" : ""}`));
-        bar.append(el("seg", "", `left:${x(p.s) - x(lo)}px;width:${w(p.s, p.b)}px;background:${done ? "var(--done)" : "var(--best)"}`));
+        // Green = optimistic; yellow runs straight on from the day after green ends to the conservative finish.
+        const hi = Math.max(p.b, p.ce);
+        const bar = el("bar" + ((t.issues || []).length ? " conflict" : ""), "", `left:${x(p.s)}px;width:${w(p.s, hi)}px;border-radius:4px`);
+        bar.append(el("", "", `width:${w(p.s, p.b)}px;background:${done ? "var(--done)" : "var(--best)"}`));
+        if (p.ce > p.b) bar.append(el("", "", `width:${w(p.b + DAY, p.ce)}px;background:${done ? "var(--done)" : "var(--cons)"};${done ? "opacity:.6" : ""}`));
         hook(bar, info); tr.append(bar);
       }
       g.append(tr);

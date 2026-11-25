@@ -9,11 +9,12 @@ const NOTION_VERSION = "2026-03-11";
 const API = "https://api.notion.com/v1";
 
 // Calculated date columns in Notion → field names in the schedule result.
+// Each lists its current name first, then older names still accepted.
 const OUTPUTS = {
-  "Best-case Start": "bestStart",
-  "Best-case End": "bestEnd",
-  "Conservative Start": "consStart",
-  "Conservative End": "consEnd",
+  bestStart: ["Optimistic Start", "Best-case Start"],
+  bestEnd: ["Optimistic End", "Best-case End"],
+  consStart: ["Conservative Start"],
+  consEnd: ["Conservative End"],
 };
 
 export default async function handler(req, res) {
@@ -109,11 +110,11 @@ function friendly(e) {
 }
 
 async function writeBack(tasks, headers) {
-  const changed = tasks.filter(t => Object.entries(OUTPUTS).some(([, k]) => t.stored[k] !== t[k]));
+  const changed = tasks.filter(t => Object.keys(OUTPUTS).some(k => t.stored[k] !== t[k]));
   let updated = 0;
   for (const t of changed) {
     const properties = {};
-    for (const [col, k] of Object.entries(OUTPUTS)) properties[col] = { date: t[k] ? { start: t[k] } : null };
+    for (const k of Object.keys(OUTPUTS)) properties[t.columns[k]] = { date: t[k] ? { start: t[k] } : null };
     const r = await fetch(`${API}/pages/${t.id}`, { method: "PATCH", headers, body: JSON.stringify({ properties }) });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
@@ -140,6 +141,7 @@ const date = p => {
 const sel  = p => p?.select?.name ?? p?.status?.name ?? null;
 const num  = p => (typeof p?.number === "number" ? p.number : null);
 const rel  = p => (p?.relation || []).map(r => r.id);
+const col  = (p, names) => names.find(n => n in p) || names[0];   // the column name this database uses
 
 function toTask(page) {
   const p = page.properties;
@@ -154,11 +156,12 @@ function toTask(page) {
     owner: text(p["Owner"]),
     progress: num(p["Progress"]),
     earliestStart: date(p["Earliest Start"]),
-    bestDays: num(p["Best-case Days"]),
+    bestDays: num(p[col(p, ["Optimistic Days", "Best-case Days"])]),
     consDays: num(p["Conservative Days"]),
     blockedBy: rel(p["Blocked by"]),
     actualStart: date(p["Actual Start Date"]),
     actualEnd: date(p["Actual End Date"]),
-    stored: Object.fromEntries(Object.entries(OUTPUTS).map(([col, k]) => [k, date(p[col])])),
+    columns: Object.fromEntries(Object.entries(OUTPUTS).map(([k, names]) => [k, col(p, names)])),
+    stored: Object.fromEntries(Object.entries(OUTPUTS).map(([k, names]) => [k, date(p[col(p, names)])])),
   };
 }

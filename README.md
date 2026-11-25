@@ -18,12 +18,14 @@ The chart refuses to run without all three. After changing any of them, redeploy
 
 ## How dates are worked out
 
-Per task you fill in **Best-case Days**, **Conservative Days** (working days, Mon–Fri), **Blocked by**, and optionally **Earliest Start**.
+Per task you fill in **Optimistic Days**, **Conservative Days** (working days, Mon–Fri), **Blocked by**, and optionally **Earliest Start**.
 
 - A task starts on the first working day after all its **Blocked by** tasks finish, never before its **Earliest Start**.
 - Tasks with no blockers need an **Earliest Start**.
-- Best-case and conservative schedules are worked out separately, so delays carry down the chain.
-- **Done** tasks have no remaining risk: their conservative dates equal their best-case dates.
+- Optimistic and conservative schedules are worked out separately, so delays carry down the chain.
+- **Done** tasks have no remaining risk: their conservative dates equal their optimistic dates.
 - **Actual Start Date** / **Actual End Date** replace the planned dates when filled in.
 
-The chart writes **Best-case Start/End** and **Conservative Start/End** back to Notion when it loads (needs **Update content** on the Notion connection).
+In the chart, green is the optimistic plan and yellow runs on from it to the conservative finish.
+
+The chart writes **Optimistic Start/End** and **Conservative Start/End** back to Notion when it loads (needs **Update content** on the Notion connection).
