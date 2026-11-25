@@ -70,7 +70,7 @@
 </head>
 <body>
 <header>
-  <h1>🚀 Sample Product Launch</h1>
+  <h1 id="title">Project</h1>
   <div class="legend">
     <span><i class="sw" style="background:var(--best)"></i>Best case</span>
     <span><i class="sw" style="background:var(--cons)"></i>Conservative</span>
@@ -82,9 +82,10 @@
 <div class="wrap"><div class="grid" id="g"></div></div>
 <div id="tip"></div>
 <script>
-const PHASE_ORDER = ["Discovery","Design","Build","Validation","Launch"];
+let PHASE_ORDER = [];   // filled from Notion: the order of the Phase options
 const STATUS_COLOR = {"Not started":"#9b9a97","In progress":"#529cca","At risk":"#e5534b","Done":"#4dab9a"};
-const DAY = 86400000, PX = 9, LABEL_W = 300;
+const DAY = 86400000, LABEL_W = 320;
+let PX = 9;   // pixels per day; shrinks for long projects
 const d = s => Date.UTC(+s.slice(0,4), +s.slice(5,7)-1, +s.slice(8,10));
 const fmt = t => new Date(t).toLocaleDateString("en-US",{month:"short",day:"numeric",timeZone:"UTC"});
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -106,6 +107,8 @@ async function load() {
     const data = await r.json();
     if (!r.ok) throw new Error(data.error || r.statusText);
     TASKS = data.tasks.filter(t => t.bestStart);
+    PHASE_ORDER = data.phaseOrder || [];
+    if (data.title) { document.getElementById("title").textContent = (data.icon ? data.icon + " " : "") + data.title; document.title = data.title; }
     render();
     const time = new Date(data.fetchedAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
     const sync = data.sync || {};
@@ -140,20 +143,24 @@ function render() {
   min -= ((new Date(min).getUTCDay() + 6) % 7) * DAY;
   max += (7 - new Date(max).getUTCDay()) % 7 * DAY + 7 * DAY;
   const days = Math.round((max - min) / DAY) + 1;
+  PX = Math.max(3, Math.min(9, Math.floor(1300 / days)));   // long projects get narrower days
   const x = t => Math.round((t - min) / DAY) * PX;
   const w = (a, b) => x(b + DAY) - x(a);           // width of an inclusive day range
   g.style.gridTemplateColumns = `${LABEL_W}px ${days * PX}px`;
 
   g.append(el("label head", "Task"));
   const head = el("track head");
-  let lastMonth = -1;
+  let lastMonth = -1, lastWk = -99;
+  const monthFmt = PX < 6 ? {month:"short",year:"2-digit",timeZone:"UTC"} : {month:"long",year:"numeric",timeZone:"UTC"};
   for (let i = 0; i < days; i++) {
     const t = min + i * DAY, dt = new Date(t);
     if (dt.getUTCMonth() !== lastMonth) {
       lastMonth = dt.getUTCMonth();
-      head.append(el("month", dt.toLocaleDateString("en-US",{month:"long",year:"numeric",timeZone:"UTC"}), `left:${x(t)}px`));
+      if (head.lastMonthEl && x(t) - head.lastMonthX < 56) head.lastMonthEl.remove();   // drop a squeezed partial month
+      head.lastMonthEl = el("month", dt.toLocaleDateString("en-US", monthFmt), `left:${x(t)}px`); head.lastMonthX = x(t);
+      head.append(head.lastMonthEl);
     }
-    if (dt.getUTCDay() === 1) head.append(el("wk", dt.getUTCDate(), `left:${x(t)}px`));
+    if (dt.getUTCDay() === 1 && x(t) - lastWk >= 24) { head.append(el("wk", dt.getUTCDate(), `left:${x(t)}px`)); lastWk = x(t); }
   }
   g.append(head);
 
