@@ -25,6 +25,7 @@ Per task you fill in **Optimistic Days**, **Conservative Days** (working days, M
 - Optimistic and conservative schedules are worked out separately, so delays carry down the chain.
 - **Done** tasks have no remaining risk: their conservative dates equal their optimistic dates.
 - **Actual Start Date** / **Actual End Date** replace the planned dates when filled in.
+- **Status** follows the actual dates: an Actual End Date sets it to Done, and an Actual Start Date on its own sets it to In progress (At risk is kept). With neither date, Status is left as you set it.
 
 In the chart, green is the optimistic plan and yellow runs on from it to the conservative finish.
 

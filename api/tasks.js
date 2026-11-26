@@ -110,11 +110,13 @@ function friendly(e) {
 }
 
 async function writeBack(tasks, headers) {
-  const changed = tasks.filter(t => Object.keys(OUTPUTS).some(k => t.stored[k] !== t[k]));
+  const statusChanged = t => t.statusType && t.status !== t.storedStatus;
+  const changed = tasks.filter(t => statusChanged(t) || Object.keys(OUTPUTS).some(k => t.stored[k] !== t[k]));
   let updated = 0;
   for (const t of changed) {
     const properties = {};
     for (const k of Object.keys(OUTPUTS)) properties[t.columns[k]] = { date: t[k] ? { start: t[k] } : null };
+    if (statusChanged(t)) properties["Status"] = { [t.statusType]: { name: t.status } };
     const r = await fetch(`${API}/pages/${t.id}`, { method: "PATCH", headers, body: JSON.stringify({ properties }) });
     if (!r.ok) {
       const e = await r.json().catch(() => ({}));
@@ -122,8 +124,8 @@ async function writeBack(tasks, headers) {
       return {
         ok: false, updated, pending: changed.length - updated,
         message: readOnly
-          ? "Notion dates not updated: the Notion connection is read-only. Turn on \"Update content\" for it."
-          : `Notion dates not updated: ${e.message || r.statusText}`,
+          ? "Notion not updated: the Notion connection is read-only. Turn on \"Update content\" for it."
+          : `Notion not updated: ${e.message || r.statusText}`,
       };
     }
     updated++;
@@ -143,9 +145,20 @@ const num  = p => (typeof p?.number === "number" ? p.number : null);
 const rel  = p => (p?.relation || []).map(r => r.id);
 const col  = (p, names) => names.find(n => n in p) || names[0];   // the column name this database uses
 
+// Status follows the actual dates: an Actual End Date means Done; an Actual Start Date
+// without an end means In progress ("At risk" is kept). With neither, Status is left as set by hand.
+function statusFromActuals(current, actualStart, actualEnd) {
+  if (actualEnd) return "Done";
+  if (actualStart) return current === "At risk" ? current : "In progress";
+  return current;
+}
+
 function toTask(page) {
   const p = page.properties;
-  const status = sel(p["Status"]);
+  const storedStatus = sel(p["Status"]);
+  const actualStart = date(p["Actual Start Date"]);
+  const actualEnd = date(p["Actual End Date"]);
+  const status = statusFromActuals(storedStatus, actualStart, actualEnd);
   return {
     id: page.id,
     url: page.url,
@@ -159,8 +172,10 @@ function toTask(page) {
     bestDays: num(p[col(p, ["Optimistic Days", "Best-case Days"])]),
     consDays: num(p["Conservative Days"]),
     blockedBy: rel(p["Blocked by"]),
-    actualStart: date(p["Actual Start Date"]),
-    actualEnd: date(p["Actual End Date"]),
+    actualStart,
+    actualEnd,
+    statusType: p["Status"]?.type || null,   // "status" or "select"
+    storedStatus,
     columns: Object.fromEntries(Object.entries(OUTPUTS).map(([k, names]) => [k, col(p, names)])),
     stored: Object.fromEntries(Object.entries(OUTPUTS).map(([k, names]) => [k, date(p[col(p, names)])])),
   };
