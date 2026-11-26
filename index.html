@@ -379,7 +379,7 @@ function renderVariability() {
       `<div class="tn" title="${esc(ser.name)}">${esc(ser.name)}</div>
        <div class="tv">${ser.live.spread} <small>working days${done ? " · done" : ""}</small></div>
        <div class="td">${delta}</div>`);
-    t.append(spark(pts, ser.name));
+    if (pts.length > 1) t.append(spark(pts, ser.name));
     tiles.append(t);
   }
   vary.append(tiles);
