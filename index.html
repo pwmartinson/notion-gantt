@@ -66,6 +66,29 @@
                   cursor: pointer; font-size: 11px; padding: 1px 6px; margin-left: 4px; }
   .tools button:hover { color: var(--fg); }
   .msg.err { color: var(--today); }
+  .tools select { border: 1px solid var(--line-strong); background: var(--bg); color: var(--fg); border-radius: 4px;
+                  font-size: 11px; padding: 1px 4px; margin-left: 4px; }
+  .ghost { position: absolute; top: 27px; height: 3px; display: flex; border-radius: 2px; overflow: hidden; pointer-events: none; }
+  .grouprow .ghost { top: 25px; }
+  .ghost > div { height: 100%; }
+  #vary { padding: 0 14px 12px; }
+  #vary .vhead { display: flex; align-items: baseline; gap: 10px; font-size: 12px; color: var(--muted); margin-bottom: 8px; cursor: pointer; user-select: none; }
+  #vary .vhead b { color: var(--fg); font-weight: 600; }
+  #vary.closed .tiles { display: none; }
+  #vary.closed .chev { transform: rotate(-90deg); }
+  .tiles { display: flex; flex-wrap: wrap; gap: 8px; }
+  .tile { border: 1px solid var(--line-strong); border-radius: 6px; padding: 7px 10px 6px; min-width: 170px; flex: 0 1 200px; }
+  .tile.total { background: var(--group); }
+  .tile .tn { font-size: 11px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .tile .tv { font-size: 18px; font-weight: 600; line-height: 1.3; }
+  .tile .tv small { font-size: 11px; font-weight: 400; color: var(--muted); }
+  .tile .td { font-size: 11px; color: var(--muted); min-height: 15px; }
+  .tile .td .good { color: #2f9e6e; } .tile .td .bad { color: var(--today); }
+  .tile svg { display: block; margin-top: 2px; overflow: visible; }
+  .spark-line { fill: none; stroke: var(--muted); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+  .spark-pt { fill: var(--muted); } .spark-pt.live { fill: var(--bg); stroke: var(--fg); stroke-width: 2; }
+  .spark-pt.sel { fill: var(--fg); }
+  .spark-hit { fill: transparent; cursor: default; }
 </style>
 </head>
 <body>
@@ -75,10 +98,13 @@
     <span><i class="sw" style="background:var(--best)"></i>Optimistic</span>
     <span><i class="sw" style="background:var(--cons)"></i>Conservative</span>
     <span><i class="sw" style="background:var(--done)"></i>Done</span>
+    <span id="ghostLegend" style="display:none"><i class="sw" style="height:3px;background:linear-gradient(90deg,var(--best) 50%,var(--cons) 50%)"></i><span></span></span>
   </div>
-  <div class="tools"><button id="expandAll">Expand all</button><button id="collapseAll">Collapse all</button></div>
+  <div class="tools"><button id="expandAll">Expand all</button><button id="collapseAll">Collapse all</button>
+    <span id="snapTools" style="display:none"><select id="snap" title="Compare with a past week's plan"></select><button id="saveSnap" title="Save this week's snapshot now">Save snapshot</button></span></div>
   <div class="note"><span id="updated">Loading…</span> <button id="refresh" title="Reload from Notion">↻</button></div>
 </header>
+<div id="vary" style="display:none"></div>
 <div class="wrap"><div class="grid" id="g"></div></div>
 <div id="tip"></div>
 <script>
@@ -97,7 +123,14 @@ let collapsed = new Set();
 try { collapsed = new Set(JSON.parse(localStorage.getItem("gantt-collapsed") || "[]")); } catch {}
 const saveCollapsed = () => { try { localStorage.setItem("gantt-collapsed", JSON.stringify([...collapsed])); } catch {} };
 
-let TASKS = [];
+let TASKS = [], LIVE = null, SNAPS = [], SNAPS_INFO = null, COMPARE = null;
+const chartKey = () => new URLSearchParams(location.search).get("key") || new URLSearchParams(location.hash.slice(1)).get("key") || "";
+async function api(path, opts = {}) {
+  const r = await fetch(path, { cache: "no-store", ...opts, headers: { "x-chart-key": chartKey(), ...(opts.headers || {}) } });
+  const data = await r.json();
+  if (!r.ok) throw new Error(data.error || r.statusText);
+  return data;
+}
 async function load() {
   updated.textContent = "Loading…";
   try {
@@ -108,13 +141,15 @@ async function load() {
     if (!r.ok) throw new Error(data.error || r.statusText);
     TASKS = data.tasks.filter(t => t.bestStart);
     PHASE_ORDER = data.phaseOrder || [];
+    LIVE = data.spreads || null;
     if (data.title) { document.getElementById("title").textContent = (data.icon ? data.icon + " " : "") + data.title; document.title = data.title; }
     render();
     const time = new Date(data.fetchedAt).toLocaleTimeString([], {hour:"numeric", minute:"2-digit"});
     const sync = data.sync || {};
     updated.innerHTML = esc("Live from Notion · updated " + time) +
       (sync.ok === false ? ` · <span style="color:var(--today)" title="${esc(sync.message)}">⚠ dates not saved to Notion</span>`
-        : sync.updated ? ` · ${sync.updated} date${sync.updated === 1 ? "" : "s"} saved to Notion` : "");
+        : sync.updated ? ` · ${sync.updated} task${sync.updated === 1 ? "" : "s"} updated in Notion` : "");
+    loadSnapshots();
   } catch (e) {
     g.innerHTML = ""; g.style.gridTemplateColumns = "1fr";
     g.append(el("msg err", "Couldn't load tasks from Notion: " + esc(e.message)));
@@ -135,11 +170,19 @@ function spans(t) {
 
 function render() {
   g.innerHTML = "";
+  const gl = document.getElementById("ghostLegend");
+  gl.style.display = COMPARE ? "" : "none";
+  if (COMPARE) gl.lastElementChild.textContent = "Thin line = plan as of " + fmt(d(COMPARE.week));
   if (!TASKS.length) { g.style.gridTemplateColumns = "1fr"; g.append(el("msg", "No tasks with a Start date yet.")); return; }
   const byId = Object.fromEntries(TASKS.map(t => [t.id.replace(/-/g, ""), t]));
 
   let min = Math.min(...TASKS.map(t => Math.min(d(t.bestStart), d(t.consStart))));
   let max = Math.max(...TASKS.map(t => { const p = spans(t); return Math.max(p.b, p.ce, p.cs); }));
+  const snapById = {};
+  for (const t of COMPARE?.tasks || []) if (t.bestStart) {
+    snapById[t.id] = t;
+    min = Math.min(min, d(t.bestStart)); max = Math.max(max, d(t.bestEnd), d(t.consEnd));
+  }
   min -= ((new Date(min).getUTCDay() + 6) % 7) * DAY;
   max += (7 - new Date(max).getUTCDay()) % 7 * DAY + 7 * DAY;
   const days = Math.round((max - min) / DAY) + 1;
@@ -163,6 +206,15 @@ function render() {
     if (dt.getUTCDay() === 1 && x(t) - lastWk >= 24) { head.append(el("wk", dt.getUTCDate(), `left:${x(t)}px`)); lastWk = x(t); }
   }
   g.append(head);
+
+  // A thin line under a bar = the same task as planned in the compared week.
+  const ghost = (s, b, ce, done) => {
+    const hi = Math.max(b, ce), gEl = el("ghost", "", `left:${x(s)}px;width:${w(s, hi)}px`);
+    gEl.append(el("", "", `width:${w(s, b)}px;background:${done ? "var(--done)" : "var(--best)"}`));
+    if (ce > b) gEl.append(el("", "", `width:${w(b + DAY, ce)}px;background:${done ? "var(--done)" : "var(--cons)"}`));
+    return gEl;
+  };
+  const was = t => t && { s: d(t.bestStart), b: d(t.bestEnd), ce: d(t.consEnd), done: t.status === "Done" };
 
   const bgFor = () => {
     const frag = document.createDocumentFragment();
@@ -207,6 +259,14 @@ function render() {
         ["Conservative", `${fmt(grp.s)} → ${fmt(grp.ce)}`],
       ],
     };
+    if (COMPARE) {
+      const old = (COMPARE.tasks || []).filter(t => t.bestStart && (t.phase || "No phase") === ph).map(was);
+      if (old.length) {
+        const o = { s: Math.min(...old.map(p => p.s)), b: Math.max(...old.map(p => p.b)), ce: Math.max(...old.map(p => p.ce)) };
+        gt.append(ghost(o.s, o.b, o.ce, old.every(p => p.done)));
+        gtip.lines.push([weekLabel(COMPARE.week), `${fmt(o.b)} optimistic · ${fmt(o.ce)} conservative`]);
+      }
+    }
     hook(gb, gtip); hook(gc, gtip);
     g.append(gt);
     if (isCollapsed) continue;
@@ -232,6 +292,11 @@ function render() {
           ...(t.issues || []).map(i => ["⚠", i]),
         ].filter(Boolean),
       };
+      const old = was(snapById[t.id]);
+      if (COMPARE) {
+        if (old) { tr.append(ghost(old.s, old.b, old.ce, old.done)); info.lines.push([weekLabel(COMPARE.week), `${fmt(old.s)} → ${fmt(old.b)} optimistic · ${fmt(old.ce)} conservative`]); }
+        else info.lines.push([weekLabel(COMPARE.week), "not in the plan yet"]);
+      }
       if (p.s === p.b && p.ce <= p.b) {
         const m = el("ms", "", `left:${x(p.s) + PX/2 - 7}px;background:${done ? "var(--done)" : "var(--best)"}`);
         hook(m, info); tr.append(m);
@@ -249,6 +314,93 @@ function render() {
 
   const now = new Date(), today = Date.UTC(now.getFullYear(), now.getMonth(), now.getDate());
   if (today >= min && today <= max) g.append(el("today", "", `left:${LABEL_W + x(today)}px`));
+}
+
+// ---------- Snapshots ----------
+const snapSel = document.getElementById("snap"), vary = document.getElementById("vary");
+const weekLabel = w => "Week of " + fmt(d(w));
+async function loadSnapshots(selectId) {
+  try {
+    const data = await api("/api/snapshots");
+    SNAPS_INFO = data;
+    SNAPS = data.snapshots || [];
+  } catch (e) { SNAPS_INFO = { available: false, message: e.message }; SNAPS = []; }
+  document.getElementById("snapTools").style.display = SNAPS_INFO.available ? "" : "none";
+  const keep = selectId ?? snapSel.value;
+  snapSel.innerHTML = `<option value="">Compare with… (none)</option>` +
+    SNAPS.map(s => `<option value="${esc(s.id)}">${esc(weekLabel(s.week))}</option>`).join("");
+  snapSel.value = SNAPS.some(s => s.id === keep) ? keep : "";
+  if (!snapSel.value && COMPARE) { COMPARE = null; render(); }
+  renderVariability();
+}
+snapSel.onchange = async () => {
+  const id = snapSel.value;
+  if (!id) { COMPARE = null; render(); renderVariability(); return; }
+  updated.dataset.prev = updated.innerHTML; updated.textContent = "Loading snapshot…";
+  try { COMPARE = await api("/api/snapshots?id=" + encodeURIComponent(id)); }
+  catch (e) { COMPARE = null; alert("Couldn't load that snapshot: " + e.message); }
+  updated.innerHTML = updated.dataset.prev;
+  render(); renderVariability();
+};
+document.getElementById("saveSnap").onclick = async e => {
+  const b = e.target; b.disabled = true; b.textContent = "Saving…";
+  try { const r = await api("/api/snapshots", { method: "POST" }); await loadSnapshots(); b.textContent = "Saved ✓"; }
+  catch (err) { b.textContent = "Save snapshot"; alert("Couldn't save the snapshot: " + err.message); }
+  setTimeout(() => { b.textContent = "Save snapshot"; b.disabled = false; }, 2000);
+};
+
+let varyOpen = true;
+try { varyOpen = localStorage.getItem("gantt-vary") !== "closed"; } catch {}
+function renderVariability() {
+  if (!LIVE || !SNAPS_INFO?.available) { vary.style.display = "none"; return; }
+  vary.style.display = "";
+  vary.className = varyOpen ? "" : "closed";
+  const hist = [...SNAPS].reverse();                       // oldest → newest
+  const ref = COMPARE ? SNAPS.find(s => s.id === snapSel.value) : SNAPS[0];
+  const refText = ref ? (COMPARE ? "vs " : "vs last snapshot, ") + fmt(d(ref.week)) : "";
+  vary.innerHTML = `<div class="vhead"><span class="chev">▼</span><b>Spread</b><span>working days between the optimistic and conservative finish · smaller is more certain${SNAPS.length ? "" : " · history starts with your first snapshot"}</span></div>`;
+  vary.querySelector(".vhead").onclick = () => { varyOpen = !varyOpen; try { localStorage.setItem("gantt-vary", varyOpen ? "open" : "closed"); } catch {} renderVariability(); };
+  const tiles = el("tiles");
+  const series = [{ name: LIVE.overall?.name || "Whole project", live: LIVE.overall, get: s => s.overall, total: true },
+                  ...LIVE.phases.map(ph => ({ name: ph.name, live: ph, get: s => s.phases.find(x => x.name === ph.name) }))];
+  for (const ser of series) {
+    if (!ser.live) continue;
+    const pts = hist.map(s => ({ label: weekLabel(s.week), id: s.id, v: ser.get(s)?.spread })).filter(p => p.v != null);
+    pts.push({ label: "Today (live)", v: ser.live.spread, live: true });
+    const then = ref ? ser.get(ref)?.spread : null;
+    let delta = "";
+    if (then != null) {
+      const dv = ser.live.spread - then;
+      delta = dv === 0 ? `no change ${esc(refText)}`
+        : `<span class="${dv < 0 ? "good" : "bad"}">${dv < 0 ? "▼" : "▲"} ${Math.abs(dv)} day${Math.abs(dv) === 1 ? "" : "s"} ${dv < 0 ? "narrower" : "wider"}</span> ${esc(refText)}`;
+    }
+    const done = ser.live.total && ser.live.done === ser.live.total;
+    const t = el("tile" + (ser.total ? " total" : ""),
+      `<div class="tn" title="${esc(ser.name)}">${esc(ser.name)}</div>
+       <div class="tv">${ser.live.spread} <small>working days${done ? " · done" : ""}</small></div>
+       <div class="td">${delta}</div>`);
+    t.append(spark(pts, ser.name));
+    tiles.append(t);
+  }
+  vary.append(tiles);
+}
+function spark(pts, name) {
+  const W = 176, H = 34, pad = 5;
+  const max = Math.max(1, ...pts.map(p => p.v));
+  const X = i => pts.length === 1 ? W / 2 : pad + i * (W - 2 * pad) / (pts.length - 1);
+  const Y = v => H - pad - (v / max) * (H - 2 * pad);
+  const ns = "http://www.w3.org/2000/svg", svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("width", W); svg.setAttribute("height", H); svg.setAttribute("viewBox", `0 0 ${W} ${H}`);
+  svg.setAttribute("role", "img"); svg.setAttribute("aria-label", `${name} spread: ` + pts.map(p => `${p.label} ${p.v} days`).join(", "));
+  const mk = (tag, attrs) => { const e = document.createElementNS(ns, tag); for (const k in attrs) e.setAttribute(k, attrs[k]); svg.append(e); return e; };
+  mk("line", { x1: pad, x2: W - pad, y1: H - pad, y2: H - pad, stroke: "var(--line-strong)", "stroke-width": 1 });
+  if (pts.length > 1) mk("polyline", { class: "spark-line", points: pts.map((p, i) => `${X(i)},${Y(p.v)}`).join(" ") });
+  pts.forEach((p, i) => {
+    mk("circle", { class: "spark-pt" + (p.live ? " live" : "") + (p.id && p.id === snapSel.value ? " sel" : ""), cx: X(i), cy: Y(p.v), r: p.live ? 3.5 : 3 });
+    const hit = mk("circle", { class: "spark-hit", cx: X(i), cy: Y(p.v), r: 9 });
+    hook(hit, { title: p.label, lines: [["Spread", `${p.v} working day${p.v === 1 ? "" : "s"}`]] });
+  });
+  return svg;
 }
 
 function hook(node, info) {
