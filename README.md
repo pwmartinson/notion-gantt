@@ -4,7 +4,9 @@ A live Gantt chart for a Notion task database, with dependency-driven scheduling
 
 - `index.html`: the chart page.
 - `api/tasks.js`: checks the chart key, reads the Notion database, schedules every task, writes the calculated dates back to Notion, and returns the tasks.
-- `lib/schedule.js`: the scheduling rules.
+- `api/snapshots.js`: saves and reads weekly snapshots.
+- `lib/schedule.js`: the scheduling rules. `lib/spread.js`: the spread calculation. `lib/notion.js`: shared Notion code.
+- `vercel.json`: runs the weekly snapshot every Monday at 11:00 UTC (6am Toronto).
 
 ## Environment variables (Vercel → Project → Settings → Environment Variables)
 
@@ -15,6 +17,13 @@ A live Gantt chart for a Notion task database, with dependency-driven scheduling
 | `CHART_KEY` | A long random string. Open the chart as `https://<your-app>.vercel.app/?key=<CHART_KEY>` |
 
 The chart refuses to run without all three. After changing any of them, redeploy.
+
+Optional:
+
+| Name | Value |
+|---|---|
+| `NOTION_SNAPSHOTS` | Link to the Snapshots database, if it isn't found automatically (see below) |
+| `CRON_SECRET` | Any random string. Vercel then signs its weekly call with it, so nobody else can trigger a snapshot |
 
 ## How dates are worked out
 
@@ -30,3 +39,13 @@ Per task you fill in **Optimistic Days**, **Conservative Days** (working days, M
 In the chart, green is the optimistic plan and yellow runs on from it to the conservative finish.
 
 The chart writes **Optimistic Start/End** and **Conservative Start/End** back to Notion when it loads (needs **Update content** on the Notion connection).
+
+## Snapshots and spread
+
+**Spread** is the number of working days between the optimistic finish and the conservative finish. The panel above the chart shows it for the whole project and for each phase, with a little history line, so you can see whether uncertainty is shrinking as work gets done.
+
+- Every Monday the app saves a snapshot into a **Snapshots** database. **Save snapshot** saves one now; saving again in the same week replaces that week's snapshot.
+- **Compare with…** picks a past week. Each bar then gets a thin line underneath showing that task as it was planned that week.
+- The app finds the Snapshots database if it is on the same Notion page as the task database, or if its description contains the task database's ID. Otherwise set `NOTION_SNAPSHOTS`.
+- Saving snapshots needs **Insert content** on the Notion connection (as well as Read and Update).
+- History starts with the first snapshot; Notion doesn't let apps read older versions.
